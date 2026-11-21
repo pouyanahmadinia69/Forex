@@ -130,19 +130,23 @@ async function refresh(){
 }
 
 // time <-> x on a chart (interpolated inside candles)
-function xOf(X,t){
+function xOf(X,t){ // x of the candle that starts at (or right after) time t, using the chart's own time->x mapping
   const a=X.data; if(!a.length) return null;
-  const j=lb(a,t+1)-1;
-  if(j<0) return null;
-  const last=j===a.length-1, stale=Date.now()/1000-a[j].time>2*X.sec;
-  const f=Math.min((t-a[j].time)/X.sec,(last&&!stale)?48:1); // live: allow future; closed market: stick to last candle edge
-  return X.c.timeScale().logicalToCoordinate(j-0.5+f);
+  const i=Math.min(lb(a,t),a.length-1);
+  const x=X.c.timeScale().timeToCoordinate(a[i].time);
+  return (x===null||x===undefined||x!==x)?null:x;
 }
-function xToTime(X,x){
-  const a=X.data; if(!a.length) return null;
-  const lg=X.c.timeScale().coordinateToLogical(x); if(lg===null) return null;
-  const j=Math.max(0,Math.min(a.length-1,Math.floor(lg+0.5)));
-  return a[j].time; // always the start of the candle under the pointer
+function xToTime(X,x){ // start time of the candle nearest to pixel x
+  const a=X.data, ts=X.c.timeScale(); if(!a.length) return null;
+  let lo=0, hi=a.length-1;
+  while(hi-lo>1){
+    const m=(lo+hi)>>1, cx=ts.timeToCoordinate(a[m].time);
+    if(cx===null) return null;
+    if(cx<x) lo=m; else hi=m;
+  }
+  const cl=ts.timeToCoordinate(a[lo].time), ch=ts.timeToCoordinate(a[hi].time);
+  if(cl===null||ch===null) return null;
+  return Math.abs(cl-x)<=Math.abs(ch-x)?a[lo].time:a[hi].time;
 }
 
 function mkHandle(X,id){
@@ -219,6 +223,7 @@ function info(){
     out.push(line);
   }
   if(h.length&&s.some(o=>o.t<h[0].time)) out.push('⚠ یک خط قدیمی‌تر از دیتای H1 لودشده است (حدود ۹ ماه اخیر) و روی H1 دیده نمی‌شه.');
+  {const f=s[0]; out.push('<small>موقعیت خط اول: D1 x='+(xOf(D,dayOf(f.t))===null?'—':Math.round(xOf(D,dayOf(f.t))))+' | H1 x='+(xOf(H,f.t)===null?'—':Math.round(xOf(H,f.t)))+'</small>');}
   if(s.length%2) out.push('یک خط تنهاست؛ خط بعدی رو بذار تا بازه بسازه. (زمان UTC)');
   else out.push('زمان‌ها UTC هستن.');
   $('info').innerHTML=out.join('<br>');
@@ -235,7 +240,7 @@ function fitFor(id){
 }
 function addAt(X,p){
   if(!p.point) return;
-  const t=xToTime(X,p.point.x); if(t===null) return;
+  const t=p.time||xToTime(X,p.point.x); if(!t) return;
   const o={id:++nid,t}; lastId=o.id; vl.push(o); draw(); info();
   if(X===D) fitFor(o.id);
 }
