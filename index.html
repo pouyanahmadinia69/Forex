@@ -72,7 +72,7 @@ const $=id=>document.getElementById(id);
 const LS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 $('key').value=LS.get('td_key')||'';
 $('sym').value=LS.get('td_sym')||'EUR/USD';
-const HINT='روی یک کندل روزانه بزن تا کل اون کندل (از شروعش تا شروع کندل بعدی) روی H1 هم هایلایت بشه؛ برای چند روز پشت‌سرهم، کندل آخر رو هم بزن. برای خط دلخواه، حالت «خط عمودی» رو بزن: هر خط روی هر دو چارت دیده می‌شه.';
+const HINT='روی یک کندل روزانه بزن تا دو خط عمودی (شروع کندل و شروع کندل بعدی) روی هر دو چارت بیفته؛ برای چند روز پشت‌سرهم، کندل آخر رو هم بزن. برای خط دلخواه، حالت «خط عمودی» رو بزن. خط‌ها رو بکش تا جابه‌جا شن و با × پاک کن.';
 $('info').textContent=HINT;
 
 const DN=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -167,13 +167,6 @@ function drawOne(X){
   if(k===X.key) return; X.key=k;
   const s=sorted(); let sh=''; const col=new Map();
   s.forEach((o,i)=>col.set(o.id,PAL[Math.floor(i/2)%PAL.length]));
-  for(let k=0;k+1<s.length;k+=2){
-    const rg=rangeFor(X,s[k].t,s[k+1].t), x1=xOf(X,rg[0]), x2=xOf(X,rg[1]);
-    if(x1!==null&&x2!==null){
-      const n=X===H?lb(H.data,s[k+1].t)-lb(H.data,s[k].t):0;
-      sh+='<div class="sh" style="left:'+x1+'px;width:'+Math.max(0,x2-x1)+'px;background:rgba('+col.get(s[k].id)+',.2);border-top:3px solid rgb('+col.get(s[k].id)+')">'+(n?'<span>'+n+' H1</span>':'')+'</div>';
-    }
-  }
   X.sl.innerHTML=sh;
   X.els.forEach((el,id)=>{if(!vl.some(o=>o.id===id)){el.remove();X.els.delete(id);}});
   vl.forEach(o=>{
@@ -192,17 +185,7 @@ new ResizeObserver(draw).observe($('cd')); new ResizeObserver(draw).observe($('c
 (function loop(){draw();paint(D);paint(H);requestAnimationFrame(loop);})(); // keeps lines glued to candles while zooming/panning
 
 const fmt=fDT;
-function paint(X){ // candles outside the marked ranges are dimmed, inside stay bright (native highlight on both charts)
-  const now=performance.now(); if(now-X.pt<150) return;
-  const s=sorted(), R=[]; for(let k=0;k+1<s.length;k+=2) R.push(rangeFor(X,s[k].t,s[k+1].t));
-  const key=R.map(r=>r.join('-')).join(); if(key===X.pk) return;
-  X.pk=key; X.pt=now;
-  X.s.setData(R.length?X.data.map(b=>{
-    if(R.some(r=>b.time>=r[0]&&b.time<r[1])) return b;
-    const c=b.close>=b.open?'rgba(38,166,154,.28)':'rgba(239,83,80,.28)';
-    return Object.assign({},b,{color:c,wickColor:c,borderColor:c});
-  }):X.data);
-}
+function paint(X){ if(X.pd===X.data) return; X.pd=X.data; X.s.setData(X.data); }
 // parallel crosshair: hovering a daily candle shows the crosshair at its start on H1, and vice versa
 function mirror(S,T,p){
   if(!xh||performance.now()<S.xl) return;
@@ -235,13 +218,18 @@ function info(){
     }
     out.push(line);
   }
+  if(h.length&&s.some(o=>o.t<h[0].time)) out.push('⚠ یک خط قدیمی‌تر از دیتای H1 لودشده است (حدود ۹ ماه اخیر) و روی H1 دیده نمی‌شه.');
   if(s.length%2) out.push('یک خط تنهاست؛ خط بعدی رو بذار تا بازه بسازه. (زمان UTC)');
   else out.push('زمان‌ها UTC هستن.');
   $('info').innerHTML=out.join('<br>');
 }
+function centerH(t){
+  const r=H.c.timeScale().getVisibleLogicalRange(), w=r?r.to-r.from:120, i=lb(H.data,t);
+  H.c.timeScale().setVisibleLogicalRange({from:i-w/2,to:i+w/2});
+}
 function fitFor(id){
   const s=sorted(), k=s.findIndex(o=>o.id===id); if(k<0) return;
-  const a=s[k-(k%2)], b=s[k-(k%2)+1]; if(!b) return;
+  const a=s[k-(k%2)], b=s[k-(k%2)+1]; if(!b){centerH(a.t);return;}
   const i=lb(H.data,a.t), j=lb(H.data,b.t)-1;
   if(j>=i) H.c.timeScale().setVisibleLogicalRange({from:i-4,to:j+4});
 }
