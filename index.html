@@ -21,7 +21,9 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .tag{position:absolute;top:6px;left:8px;z-index:3;color:var(--m);font-weight:700;pointer-events:none}
 .chart{height:38vh;min-height:250px;direction:ltr}
 .ov{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:2}
-.vl{position:absolute;top:0;bottom:0;border-left:2px dashed var(--a)}
+.vh{position:absolute;top:0;bottom:0;width:30px;margin-left:-15px;pointer-events:auto;touch-action:none;cursor:ew-resize}
+.vl{position:absolute;left:14px;top:0;bottom:0;border-left:2px dashed var(--a)}
+.x{position:absolute;left:4px;top:26px;width:22px;height:22px;border-radius:50%;background:var(--a);color:#111;text-align:center;line-height:21px;font-weight:700;cursor:pointer}
 .sh{position:absolute;top:0;bottom:0;background:rgba(255,176,32,.09)}
 </style>
 </head>
@@ -37,8 +39,9 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
     <option value="300" selected>هر ۵ دقیقه</option>
   </select>
   <button id="bVl" class="on">خط عمودی</button>
-  <button id="bSel">انتخاب روز</button>
+  <button id="bDay">کندل کامل</button>
   <button id="bLine">خط افقی</button>
+  <button id="bMag">مگنت</button>
   <button id="bClr">پاک‌سازی</button>
 </div>
 <div id="st" style="padding:8px 10px 0;color:var(--a);font-weight:600"></div>
@@ -66,21 +69,23 @@ const $=id=>document.getElementById(id);
 const LS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 $('key').value=LS.get('td_key')||'';
 $('sym').value=LS.get('td_sym')||'EUR/USD';
-const HINT='خط عمودی: روی نیمه چپ یک کندل روزانه بزن تا شروعش، و روی نیمه راست (یا کندل بعدی) تا پایانش مشخص شه. برای دقت بیشتر چارت رو با دو انگشت زوم کن.';
+const HINT='هر جای چارت (روزانه یا ساعتی) بزن تا خط عمودی بیفته. خط رو بکش تا جابه‌جا شه و با × پاکش کن. هر دو خط پشت‌سرهم یک بازه می‌سازن.';
 $('info').textContent=HINT;
 
 const opt={autoSize:true,layout:{background:{color:'#161d25'},textColor:'#8996a3'},
   grid:{vertLines:{color:'#202a35'},horzLines:{color:'#202a35'}},
   rightPriceScale:{borderColor:'#27313d'},
   timeScale:{borderColor:'#27313d',timeVisible:true,secondsVisible:false}};
-function mk(el,sec){
+function mk(el,ov,sec){
   const c=LightweightCharts.createChart(el,opt);
   const s=c.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',borderVisible:false,wickUpColor:'#26a69a',wickDownColor:'#ef5350'});
-  return {c,s,sec,data:[]};
+  const sl=document.createElement('div'); ov.appendChild(sl);
+  return {c,s,sec,el,ov,sl,els:new Map(),data:[]};
 }
-const D=mk($('cd'),86400), H=mk($('ch'),3600);
-let vl=[], sel=null, mode='vl', first=true, timer=null, lines=[];
+const D=mk($('cd'),$('od'),86400), H=mk($('ch'),$('oh'),3600);
+let vl=[], nid=0, drag=null, mode='vl', snap=false, first=true, timer=null, lines=[];
 const lb=(a,t)=>{let l=0,h=a.length;while(l<h){const m=(l+h)>>1;a[m].time<t?l=m+1:h=m}return l};
+const sorted=()=>vl.slice().sort((a,b)=>a.t-b.t);
 
 async function load(iv,n){
   const u='https://api.twelvedata.com/time_series?symbol='+encodeURIComponent($('sym').value.trim())+
@@ -108,7 +113,7 @@ async function refresh(){
   }catch(e){ $('st').textContent='خطا: '+(e.message==='Failed to fetch'?'اتصال به api.twelvedata.com برقرار نشد (اینترنت، فیلتر یا VPN).':e.message); }
 }
 
-// x position of a time on a chart (interpolated inside its candles)
+// time <-> x on a chart (interpolated inside candles)
 function xOf(X,t){
   const a=X.data; if(!a.length) return null;
   const j=lb(a,t+1)-1;
@@ -116,45 +121,86 @@ function xOf(X,t){
   const f=Math.min((t-a[j].time)/X.sec,1);
   return X.c.timeScale().logicalToCoordinate(j-0.5+f);
 }
-function drawOne(X,ov){
-  let h='';
-  const xs=vl.map(t=>xOf(X,t));
-  if(xs.length===2&&xs[0]!==null&&xs[1]!==null) h+='<div class="sh" style="left:'+xs[0]+'px;width:'+Math.max(0,xs[1]-xs[0])+'px"></div>';
-  xs.forEach(x=>{if(x!==null)h+='<div class="vl" style="left:'+x+'px"></div>';});
-  ov.innerHTML=h;
+function xToTime(X,x){
+  const a=X.data; if(!a.length) return null;
+  const lg=X.c.timeScale().coordinateToLogical(x); if(lg===null) return null;
+  const j=Math.max(0,Math.min(a.length-1,Math.floor(lg+0.5)));
+  let f=Math.max(0,Math.min(1,lg-(j-0.5)));
+  if(snap) f=f<0.5?0:1;
+  return Math.round(a[j].time+f*X.sec);
 }
-function draw(){ drawOne(D,$('od')); drawOne(H,$('oh')); }
+
+function mkHandle(X,id){
+  const el=document.createElement('div'); el.className='vh';
+  el.innerHTML='<div class="vl"></div><div class="x" data-x="1">×</div>';
+  el.addEventListener('pointerdown',e=>{
+    if(e.target.dataset.x){vl=vl.filter(o=>o.id!==id);draw();info();return;}
+    el.setPointerCapture(e.pointerId); drag={id,X}; e.preventDefault();
+  });
+  el.addEventListener('pointermove',e=>{
+    if(!drag||drag.id!==id) return;
+    const t=xToTime(X,e.clientX-X.el.getBoundingClientRect().left); if(t===null) return;
+    const o=vl.find(o=>o.id===id); if(o){o.t=t;draw();info();}
+  });
+  const end=()=>{if(drag&&drag.id===id){drag=null;if(X===D)fitFor(id);}};
+  el.addEventListener('pointerup',end); el.addEventListener('pointercancel',end);
+  return el;
+}
+function drawOne(X){
+  const xs=new Map(); vl.forEach(o=>xs.set(o.id,xOf(X,o.t)));
+  const s=sorted(); let sh='';
+  for(let k=0;k+1<s.length;k+=2){
+    const x1=xs.get(s[k].id), x2=xs.get(s[k+1].id);
+    if(x1!==null&&x2!==null) sh+='<div class="sh" style="left:'+x1+'px;width:'+Math.max(0,x2-x1)+'px"></div>';
+  }
+  X.sl.innerHTML=sh;
+  X.els.forEach((el,id)=>{if(!vl.some(o=>o.id===id)){el.remove();X.els.delete(id);}});
+  vl.forEach(o=>{
+    let el=X.els.get(o.id);
+    if(!el){el=mkHandle(X,o.id);X.ov.appendChild(el);X.els.set(o.id,el);}
+    const x=xs.get(o.id);
+    el.style.display=x===null?'none':'block';
+    if(x!==null) el.style.left=x+'px';
+  });
+}
+function draw(){ drawOne(D); drawOne(H); }
 D.c.timeScale().subscribeVisibleLogicalRangeChange(draw);
 H.c.timeScale().subscribeVisibleLogicalRangeChange(draw);
 new ResizeObserver(draw).observe($('cd')); new ResizeObserver(draw).observe($('ch'));
 
 const fmt=t=>new Date(t*1000).toISOString().slice(0,16).replace('T',' ');
 function info(){
-  if(vl.length<2){$('info').textContent=vl.length?'خط اول گذاشته شد. خط دوم رو بذار.':HINT;return;}
-  const [s,e]=vl, h=H.data, i=lb(h,s), j=lb(h,e)-1;
-  if(j<i){$('info').textContent='توی این بازه کندل ۱ ساعته‌ای نیست (شاید دیتا کافی لود نشده).';return;}
-  let hi=-Infinity, lo=Infinity;
-  for(let k=i;k<=j;k++){hi=Math.max(hi,h[k].high);lo=Math.min(lo,h[k].low);}
-  const sym=$('sym').value.toUpperCase();
-  const pip=sym.includes('JPY')?0.01:sym.includes('XAU')?0.1:0.0001;
-  $('info').innerHTML='<b>'+fmt(s)+' تا '+fmt(e)+' UTC</b> | '+(j-i+1)+' کندل H1 | بالاترین '+hi.toFixed(5)+
-    ' | پایین‌ترین '+lo.toFixed(5)+' | رنج '+((hi-lo)/pip).toFixed(1)+' پیپ';
+  const s=sorted(), h=H.data;
+  if(!s.length){$('info').textContent=HINT;return;}
+  let out=[];
+  for(let k=0;k+1<s.length&&out.length<4;k+=2){
+    const i=lb(h,s[k].t), j=lb(h,s[k+1].t)-1;
+    let line='<b>بازه '+(k/2+1)+':</b> '+fmt(s[k].t)+' تا '+fmt(s[k+1].t);
+    if(j<i) line+=' | کندل H1 نیست';
+    else{
+      let hi=-Infinity, lo=Infinity;
+      for(let q=i;q<=j;q++){hi=Math.max(hi,h[q].high);lo=Math.min(lo,h[q].low);}
+      const sym=$('sym').value.toUpperCase();
+      const pip=sym.includes('JPY')?0.01:sym.includes('XAU')?0.1:0.0001;
+      line+=' | '+(j-i+1)+' کندل H1 | بالا '+hi.toFixed(5)+' | پایین '+lo.toFixed(5)+' | رنج '+((hi-lo)/pip).toFixed(1)+' پیپ';
+    }
+    out.push(line);
+  }
+  if(s.length%2) out.push('یک خط تنهاست؛ خط بعدی رو بذار تا بازه بسازه. (زمان UTC)');
+  else out.push('زمان‌ها UTC هستن.');
+  $('info').innerHTML=out.join('<br>');
 }
-function showOnH1(){
-  if(vl.length<2) return;
-  const i=lb(H.data,vl[0]), j=lb(H.data,vl[1])-1;
+function fitFor(id){
+  const s=sorted(), k=s.findIndex(o=>o.id===id); if(k<0) return;
+  const a=s[k-(k%2)], b=s[k-(k%2)+1]; if(!b) return;
+  const i=lb(H.data,a.t), j=lb(H.data,b.t)-1;
   if(j>=i) H.c.timeScale().setVisibleLogicalRange({from:i-4,to:j+4});
 }
-function after(scroll){ if(scroll) showOnH1(); draw(); info(); }
-
-// vertical line: left half of a candle = its start, right half = its end
-function tapV(X,p){
-  if(!p.point||!X.data.length) return;
-  const lg=X.c.timeScale().coordinateToLogical(p.point.x); if(lg===null) return;
-  const idx=Math.max(0,Math.min(X.data.length-1,Math.round(lg)));
-  const t=lg<idx?X.data[idx].time:X.data[idx].time+X.sec;
-  vl=vl.length>=2?[t]:vl.concat(t).sort((a,b)=>a-b);
-  sel=null; after(X===D);
+function addAt(X,p){
+  if(!p.point) return;
+  const t=xToTime(X,p.point.x); if(t===null) return;
+  const o={id:++nid,t}; vl.push(o); draw(); info();
+  if(X===D) fitFor(o.id);
 }
 function addLine(X,p){
   if(!p.point) return;
@@ -163,23 +209,23 @@ function addLine(X,p){
 }
 D.c.subscribeClick(p=>{
   if(mode==='line') return addLine(D,p);
-  if(mode==='vl') return tapV(D,p);
-  if(!p.time) return;
-  const t=p.time;
-  sel=(!sel||sel.a!==sel.b)?{a:t,b:t}:{a:Math.min(sel.a,t),b:Math.max(sel.a,t)};
-  vl=[sel.a,sel.b+86400]; after(true);
+  if(mode==='vl') return addAt(D,p);
+  if(!p.time) return; // full-day mode: two lines at the candle's start and end
+  const a={id:++nid,t:p.time}, b={id:++nid,t:p.time+86400};
+  vl.push(a,b); draw(); info(); fitFor(a.id);
 });
 H.c.subscribeClick(p=>{
   if(mode==='line') addLine(H,p);
-  else if(mode==='vl') tapV(H,p);
+  else if(mode==='vl') addAt(H,p);
 });
 
 function setMode(m){mode=m;
-  $('bVl').classList.toggle('on',m==='vl');$('bSel').classList.toggle('on',m==='sel');$('bLine').classList.toggle('on',m==='line');}
+  $('bVl').classList.toggle('on',m==='vl');$('bDay').classList.toggle('on',m==='day');$('bLine').classList.toggle('on',m==='line');}
 $('bVl').onclick=()=>setMode('vl');
-$('bSel').onclick=()=>setMode('sel');
+$('bDay').onclick=()=>setMode('day');
 $('bLine').onclick=()=>setMode(mode==='line'?'vl':'line');
-$('bClr').onclick=()=>{lines.forEach(o=>o.s.removePriceLine(o.l));lines=[];vl=[];sel=null;draw();$('info').textContent=HINT;};
+$('bMag').onclick=()=>{snap=!snap;$('bMag').classList.toggle('on',snap);};
+$('bClr').onclick=()=>{lines.forEach(o=>o.s.removePriceLine(o.l));lines=[];vl=[];draw();info();};
 
 function startTimer(){
   clearInterval(timer);
@@ -189,7 +235,7 @@ function startTimer(){
 $('every').onchange=startTimer;
 $('go').onclick=()=>{
   LS.set('td_key',$('key').value.trim()); LS.set('td_sym',$('sym').value.trim());
-  first=true; vl=[]; sel=null; draw(); refresh(); startTimer();
+  first=true; vl=[]; draw(); refresh(); startTimer();
 };
 if($('key').value){refresh();startTimer();}
 }
