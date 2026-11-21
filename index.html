@@ -22,9 +22,10 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .chart{height:38vh;min-height:250px;direction:ltr}
 .ov{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:2}
 .vh{position:absolute;top:0;bottom:0;width:30px;margin-left:-15px;pointer-events:auto;touch-action:none;cursor:ew-resize}
-.vl{position:absolute;left:14px;top:0;bottom:0;border-left:2px dashed var(--a)}
-.x{position:absolute;left:4px;top:26px;width:22px;height:22px;border-radius:50%;background:var(--a);color:#111;text-align:center;line-height:21px;font-weight:700;cursor:pointer}
-.sh{position:absolute;top:0;bottom:0;background:rgba(255,176,32,.09)}
+.vl{position:absolute;left:14px;top:0;bottom:0;border-left:2px dashed var(--c,var(--a))}
+.x{position:absolute;left:4px;top:26px;width:22px;height:22px;border-radius:50%;background:var(--c,var(--a));color:#111;text-align:center;line-height:21px;font-weight:700;cursor:pointer}
+.sh{position:absolute;top:0;bottom:0}
+.sh span{position:absolute;top:4px;left:50%;transform:translateX(-50%);color:#fff;font-size:11px;background:rgba(0,0,0,.45);padding:1px 6px;border-radius:4px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -97,6 +98,7 @@ function mk(el,ov,sec,cf){
 const D=mk($('cd'),$('od'),86400,fDay), H=mk($('ch'),$('oh'),3600,fDT);
 let lastId=0, vl=[], nid=0, drag=null, mode='vl', snap=false, first=true, timer=null, lines=[];
 const lb=(a,t)=>{let l=0,h=a.length;while(l<h){const m=(l+h)>>1;a[m].time<t?l=m+1:h=m}return l};
+const PAL=['255,176,32','79,195,247','186,104,200','129,199,132'];
 const sorted=()=>vl.slice().sort((a,b)=>a.t-b.t);
 
 async function load(iv,n){
@@ -129,8 +131,9 @@ async function refresh(){
 function xOf(X,t){
   const a=X.data; if(!a.length) return null;
   const j=lb(a,t+1)-1;
-  if(j<0 || t>a[a.length-1].time+X.sec) return null;
-  const f=Math.min((t-a[j].time)/X.sec,1);
+  if(j<0) return null;
+  const last=j===a.length-1, stale=Date.now()/1000-a[j].time>2*X.sec;
+  const f=Math.min((t-a[j].time)/X.sec,(last&&!stale)?48:1); // live: allow future; closed market: stick to last candle edge
   return X.c.timeScale().logicalToCoordinate(j-0.5+f);
 }
 function xToTime(X,x){
@@ -162,16 +165,21 @@ function drawOne(X){
   const xs=new Map(); vl.forEach(o=>xs.set(o.id,xOf(X,o.t)));
   const k=vl.map(o=>o.id+':'+o.t+':'+xs.get(o.id)).join();
   if(k===X.key) return; X.key=k;
-  const s=sorted(); let sh='';
+  const s=sorted(); let sh=''; const col=new Map();
+  s.forEach((o,i)=>col.set(o.id,PAL[Math.floor(i/2)%PAL.length]));
   for(let k=0;k+1<s.length;k+=2){
     const x1=xs.get(s[k].id), x2=xs.get(s[k+1].id);
-    if(x1!==null&&x2!==null) sh+='<div class="sh" style="left:'+x1+'px;width:'+Math.max(0,x2-x1)+'px"></div>';
+    if(x1!==null&&x2!==null){
+      const n=X===H?lb(H.data,s[k+1].t)-lb(H.data,s[k].t):0;
+      sh+='<div class="sh" style="left:'+x1+'px;width:'+Math.max(0,x2-x1)+'px;background:rgba('+col.get(s[k].id)+',.2);border-top:3px solid rgb('+col.get(s[k].id)+')">'+(n?'<span>'+n+' H1</span>':'')+'</div>';
+    }
   }
   X.sl.innerHTML=sh;
   X.els.forEach((el,id)=>{if(!vl.some(o=>o.id===id)){el.remove();X.els.delete(id);}});
   vl.forEach(o=>{
     let el=X.els.get(o.id);
     if(!el){el=mkHandle(X,o.id);X.ov.appendChild(el);X.els.set(o.id,el);}
+    el.style.setProperty('--c','rgb('+col.get(o.id)+')');
     const x=xs.get(o.id);
     el.style.display=x===null?'none':'block';
     if(x!==null) el.style.left=x+'px';
