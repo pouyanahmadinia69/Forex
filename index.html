@@ -42,6 +42,8 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   <button id="bDay">کندل کامل</button>
   <button id="bLine">خط افقی</button>
   <button id="bMag">مگنت</button>
+  <button id="bSync">همگام زمان</button>
+  <button id="bFit">H1 روی بازه</button>
   <button id="bClr">پاک‌سازی</button>
 </div>
 <div id="st" style="padding:8px 10px 0;color:var(--a);font-weight:600"></div>
@@ -72,18 +74,28 @@ $('sym').value=LS.get('td_sym')||'EUR/USD';
 const HINT='هر جای چارت (روزانه یا ساعتی) بزن تا خط عمودی بیفته. خط رو بکش تا جابه‌جا شه و با × پاکش کن. هر دو خط پشت‌سرهم یک بازه می‌سازن.';
 $('info').textContent=HINT;
 
+const DN=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const p2=n=>String(n).padStart(2,'0');
+const fDay=t=>{const d=new Date(t*1000);return DN[d.getUTCDay()]+' '+d.getUTCDate()+' '+MN[d.getUTCMonth()]+' '+String(d.getUTCFullYear()).slice(2);};
+const fDT=t=>{const d=new Date(t*1000);return fDay(t)+' '+p2(d.getUTCHours())+':'+p2(d.getUTCMinutes());};
+const tickF=(t,type)=>{const d=new Date(t*1000);
+  if(type===0)return String(d.getUTCFullYear());
+  if(type===1)return MN[d.getUTCMonth()]+' '+String(d.getUTCFullYear()).slice(2);
+  if(type===2)return DN[d.getUTCDay()].slice(0,3)+' '+d.getUTCDate()+' '+MN[d.getUTCMonth()];
+  return p2(d.getUTCHours())+':'+p2(d.getUTCMinutes());};
 const opt={autoSize:true,layout:{background:{color:'#161d25'},textColor:'#8996a3'},
   grid:{vertLines:{color:'#202a35'},horzLines:{color:'#202a35'}},
   rightPriceScale:{borderColor:'#27313d'},
   timeScale:{borderColor:'#27313d',timeVisible:true,secondsVisible:false}};
-function mk(el,ov,sec){
-  const c=LightweightCharts.createChart(el,opt);
+function mk(el,ov,sec,cf){
+  const c=LightweightCharts.createChart(el,Object.assign({},opt,{localization:{timeFormatter:cf},timeScale:Object.assign({},opt.timeScale,{tickMarkFormatter:tickF})}));
   const s=c.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',borderVisible:false,wickUpColor:'#26a69a',wickDownColor:'#ef5350'});
   const sl=document.createElement('div'); ov.appendChild(sl);
-  return {c,s,sec,el,ov,sl,els:new Map(),data:[]};
+  return {c,s,sec,el,ov,sl,els:new Map(),data:[],lock:0,key:''};
 }
-const D=mk($('cd'),$('od'),86400), H=mk($('ch'),$('oh'),3600);
-let vl=[], nid=0, drag=null, mode='vl', snap=false, first=true, timer=null, lines=[];
+const D=mk($('cd'),$('od'),86400,fDay), H=mk($('ch'),$('oh'),3600,fDT);
+let lastId=0, vl=[], nid=0, drag=null, mode='vl', snap=false, first=true, timer=null, lines=[];
 const lb=(a,t)=>{let l=0,h=a.length;while(l<h){const m=(l+h)>>1;a[m].time<t?l=m+1:h=m}return l};
 const sorted=()=>vl.slice().sort((a,b)=>a.t-b.t);
 
@@ -101,7 +113,7 @@ async function load(iv,n){
 async function refresh(){
   $('st').style.color='var(--a)';$('st').textContent='در حال دریافت...';
   try{
-    const [d,h]=await Promise.all([load('1day',300),load('1h',2000)]);
+    const [d,h]=await Promise.all([load('1day',500),load('1h',5000)]);
     D.data=d; H.data=h; D.s.setData(d); H.s.setData(h);
     if(first){
       D.c.timeScale().setVisibleLogicalRange({from:d.length-40,to:d.length+3});
@@ -135,7 +147,7 @@ function mkHandle(X,id){
   el.innerHTML='<div class="vl"></div><div class="x" data-x="1">×</div>';
   el.addEventListener('pointerdown',e=>{
     if(e.target.dataset.x){vl=vl.filter(o=>o.id!==id);draw();info();return;}
-    el.setPointerCapture(e.pointerId); drag={id,X}; e.preventDefault();
+    el.setPointerCapture(e.pointerId); drag={id,X}; lastId=id; e.preventDefault();
   });
   el.addEventListener('pointermove',e=>{
     if(!drag||drag.id!==id) return;
@@ -148,6 +160,8 @@ function mkHandle(X,id){
 }
 function drawOne(X){
   const xs=new Map(); vl.forEach(o=>xs.set(o.id,xOf(X,o.t)));
+  const k=vl.map(o=>o.id+':'+o.t+':'+xs.get(o.id)).join();
+  if(k===X.key) return; X.key=k;
   const s=sorted(); let sh='';
   for(let k=0;k+1<s.length;k+=2){
     const x1=xs.get(s[k].id), x2=xs.get(s[k+1].id);
@@ -167,8 +181,9 @@ function draw(){ drawOne(D); drawOne(H); }
 D.c.timeScale().subscribeVisibleLogicalRangeChange(draw);
 H.c.timeScale().subscribeVisibleLogicalRangeChange(draw);
 new ResizeObserver(draw).observe($('cd')); new ResizeObserver(draw).observe($('ch'));
+(function loop(){draw();requestAnimationFrame(loop);})(); // keeps lines glued to candles while zooming/panning
 
-const fmt=t=>new Date(t*1000).toISOString().slice(0,16).replace('T',' ');
+const fmt=fDT;
 function info(){
   const s=sorted(), h=H.data;
   if(!s.length){$('info').textContent=HINT;return;}
@@ -199,7 +214,7 @@ function fitFor(id){
 function addAt(X,p){
   if(!p.point) return;
   const t=xToTime(X,p.point.x); if(t===null) return;
-  const o={id:++nid,t}; vl.push(o); draw(); info();
+  const o={id:++nid,t}; lastId=o.id; vl.push(o); draw(); info();
   if(X===D) fitFor(o.id);
 }
 function addLine(X,p){
@@ -212,13 +227,27 @@ D.c.subscribeClick(p=>{
   if(mode==='vl') return addAt(D,p);
   if(!p.time) return; // full-day mode: two lines at the candle's start and end
   const a={id:++nid,t:p.time}, b={id:++nid,t:p.time+86400};
-  vl.push(a,b); draw(); info(); fitFor(a.id);
+  vl.push(a,b); lastId=a.id; draw(); info(); fitFor(a.id);
 });
 H.c.subscribeClick(p=>{
   if(mode==='line') addLine(H,p);
   else if(mode==='vl') addAt(H,p);
 });
 
+let sync=false;
+function toLg(X,t){const a=X.data;if(!a.length)return 0;const j=lb(a,t+1)-1;
+  if(j<0)return -0.5+(t-a[0].time)/X.sec;
+  const f=(t-a[j].time)/X.sec; return j-0.5+(j===a.length-1?f:Math.min(f,1));}
+function toTime(X,lg){const a=X.data;const j=Math.max(0,Math.min(a.length-1,Math.floor(lg+0.5)));return a[j].time+(lg-(j-0.5))*X.sec;}
+function follow(S,T,r){
+  if(!r||!S.data.length||!T.data.length||performance.now()<S.lock) return;
+  T.lock=performance.now()+250;
+  T.c.timeScale().setVisibleLogicalRange({from:toLg(T,toTime(S,r.from)),to:toLg(T,toTime(S,r.to))});
+}
+D.c.timeScale().subscribeVisibleLogicalRangeChange(r=>{if(sync)follow(D,H,r);});
+H.c.timeScale().subscribeVisibleLogicalRangeChange(r=>{if(sync)follow(H,D,r);});
+$('bSync').onclick=()=>{sync=!sync;$('bSync').classList.toggle('on',sync);if(sync)follow(D,H,D.c.timeScale().getVisibleLogicalRange());};
+$('bFit').onclick=()=>{const s=sorted(); if(s.length) fitFor(lastId||s[0].id);};
 function setMode(m){mode=m;
   $('bVl').classList.toggle('on',m==='vl');$('bDay').classList.toggle('on',m==='day');$('bLine').classList.toggle('on',m==='line');}
 $('bVl').onclick=()=>setMode('vl');
