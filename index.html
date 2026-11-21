@@ -42,7 +42,6 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   <button id="bDay" class="on">انتخاب کندل</button>
   <button id="bVl">خط عمودی</button>
   <button id="bLine">خط افقی</button>
-  <button id="bMag">مگنت</button>
   <button id="bXh" class="on">کراس موازی</button>
   <button id="bSync">همگام زمان</button>
   <button id="bFit">H1 روی بازه</button>
@@ -73,8 +72,7 @@ const $=id=>document.getElementById(id);
 const LS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 $('key').value=LS.get('td_key')||'';
 $('sym').value=LS.get('td_sym')||'EUR/USD';
-const HINT='روی یک کندل روزانه بزن تا کل اون کندل (از شروعش تا شروع کندل بعدی) روی H1 هم هایلایت بشه. برای چند روز پشت‌سرهم، کندل آخر رو هم بزن. برای خط دلخواه، حالت «خط عمودی» رو بزن.';
-const HINT_OLD='هر جای چارت (روزانه یا ساعتی) بزن تا خط عمودی بیفته. خط رو بکش تا جابه‌جا شه و با × پاکش کن. هر دو خط پشت‌سرهم یک بازه می‌سازن.';
+const HINT='روی یک کندل روزانه بزن تا کل اون کندل (از شروعش تا شروع کندل بعدی) روی H1 هم هایلایت بشه؛ برای چند روز پشت‌سرهم، کندل آخر رو هم بزن. برای خط دلخواه، حالت «خط عمودی» رو بزن: هر خط روی هر دو چارت دیده می‌شه.';
 $('info').textContent=HINT;
 
 const DN=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -98,9 +96,11 @@ function mk(el,ov,sec,cf){
   return {c,s,sec,el,ov,sl,els:new Map(),data:[],lock:0,key:'',pk:null,pt:0,xl:0};
 }
 const D=mk($('cd'),$('od'),86400,fDay), H=mk($('ch'),$('oh'),3600,fDT);
-let lastId=0, dayPair=null, xh=true, vl=[], nid=0, drag=null, mode='day', snap=false, first=true, timer=null, lines=[];
+let lastId=0, dayPair=null, xh=true, vl=[], nid=0, drag=null, mode='day', first=true, timer=null, lines=[];
 const lb=(a,t)=>{let l=0,h=a.length;while(l<h){const m=(l+h)>>1;a[m].time<t?l=m+1:h=m}return l};
 const PAL=['255,176,32','79,195,247','186,104,200','129,199,132'];
+const dayOf=t=>Math.floor(t/86400)*86400;
+function rangeFor(X,a,b){ if(X!==D) return [a,b]; const lo=dayOf(a); let hi=dayOf(b); if(hi<=lo) hi=lo+86400; return [lo,hi]; }
 const sorted=()=>vl.slice().sort((a,b)=>a.t-b.t);
 
 async function load(iv,n){
@@ -111,7 +111,7 @@ async function load(iv,n){
   return j.values.map(v=>{
     const s=v.datetime.length>10?v.datetime.replace(' ','T'):v.datetime+'T00:00:00';
     return {time:Date.parse(s+'Z')/1000,open:+v.open,high:+v.high,low:+v.low,close:+v.close};
-  }).reverse();
+  }).reverse().filter(b=>{const w=new Date(b.time*1000).getUTCDay();return w!==0&&w!==6;});
 }
 
 async function refresh(){
@@ -142,9 +142,7 @@ function xToTime(X,x){
   const a=X.data; if(!a.length) return null;
   const lg=X.c.timeScale().coordinateToLogical(x); if(lg===null) return null;
   const j=Math.max(0,Math.min(a.length-1,Math.floor(lg+0.5)));
-  let f=Math.max(0,Math.min(1,lg-(j-0.5)));
-  if(snap) f=f<0.5?0:1;
-  return Math.round(a[j].time+f*X.sec);
+  return a[j].time; // always the start of the candle under the pointer
 }
 
 function mkHandle(X,id){
@@ -164,13 +162,13 @@ function mkHandle(X,id){
   return el;
 }
 function drawOne(X){
-  const xs=new Map(); vl.forEach(o=>xs.set(o.id,xOf(X,o.t)));
+  const xs=new Map(); vl.forEach(o=>xs.set(o.id,xOf(X,X===D?dayOf(o.t):o.t)));
   const k=vl.map(o=>o.id+':'+o.t+':'+xs.get(o.id)).join();
   if(k===X.key) return; X.key=k;
   const s=sorted(); let sh=''; const col=new Map();
   s.forEach((o,i)=>col.set(o.id,PAL[Math.floor(i/2)%PAL.length]));
   for(let k=0;k+1<s.length;k+=2){
-    const x1=xs.get(s[k].id), x2=xs.get(s[k+1].id);
+    const rg=rangeFor(X,s[k].t,s[k+1].t), x1=xOf(X,rg[0]), x2=xOf(X,rg[1]);
     if(x1!==null&&x2!==null){
       const n=X===H?lb(H.data,s[k+1].t)-lb(H.data,s[k].t):0;
       sh+='<div class="sh" style="left:'+x1+'px;width:'+Math.max(0,x2-x1)+'px;background:rgba('+col.get(s[k].id)+',.2);border-top:3px solid rgb('+col.get(s[k].id)+')">'+(n?'<span>'+n+' H1</span>':'')+'</div>';
@@ -196,7 +194,7 @@ new ResizeObserver(draw).observe($('cd')); new ResizeObserver(draw).observe($('c
 const fmt=fDT;
 function paint(X){ // candles outside the marked ranges are dimmed, inside stay bright (native highlight on both charts)
   const now=performance.now(); if(now-X.pt<150) return;
-  const s=sorted(), R=[]; for(let k=0;k+1<s.length;k+=2) R.push([s[k].t,s[k+1].t]);
+  const s=sorted(), R=[]; for(let k=0;k+1<s.length;k+=2) R.push(rangeFor(X,s[k].t,s[k+1].t));
   const key=R.map(r=>r.join('-')).join(); if(key===X.pk) return;
   X.pk=key; X.pt=now;
   X.s.setData(R.length?X.data.map(b=>{
@@ -295,7 +293,6 @@ $('bVl').onclick=()=>setMode('vl');
 $('bDay').onclick=()=>setMode('day');
 $('bLine').onclick=()=>setMode(mode==='line'?'vl':'line');
 $('bXh').onclick=()=>{xh=!xh;$('bXh').classList.toggle('on',xh);if(!xh){try{D.c.clearCrosshairPosition();H.c.clearCrosshairPosition();}catch(e){}}};
-$('bMag').onclick=()=>{snap=!snap;$('bMag').classList.toggle('on',snap);};
 $('bClr').onclick=()=>{lines.forEach(o=>o.s.removePriceLine(o.l));lines=[];vl=[];dayPair=null;draw();info();};
 
 function startTimer(){
