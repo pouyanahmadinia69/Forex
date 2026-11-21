@@ -40,14 +40,15 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   <button id="bLine">خط افقی</button>
   <button id="bClr">پاک‌سازی</button>
 </div>
+<div id="st" style="padding:8px 10px 0;color:var(--a);font-weight:600"></div>
 <div id="info">کلید API را وارد کن و بارگذاری بزن. بعد روی کندل‌های چارت روزانه بزن.</div>
 <div class="panel"><span class="tag">D1</span><div id="cd" class="chart"></div><div id="od" class="ov"></div></div>
 <div class="panel"><span class="tag">H1</span><div id="ch" class="chart"></div><div id="oh" class="ov"></div></div>
-<div id="st" style="padding:0 10px 14px;color:var(--m)"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lightweight-charts/4.1.3/lightweight-charts.standalone.production.js"></script>
 <script>
 const $=id=>document.getElementById(id);
+if(typeof LightweightCharts==='undefined'){$('st').textContent='خطا: کتابخانه چارت لود نشد. اینترنت یا فیلتر رو چک کن (cdnjs.cloudflare.com باید باز بشه).';throw new Error('no lib');}
 const LS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 $('key').value=LS.get('td_key')||'';
 $('sym').value=LS.get('td_sym')||'EUR/USD';
@@ -83,7 +84,7 @@ async function load(iv,n){
 }
 
 async function refresh(){
-  $('st').textContent='در حال دریافت...';
+  $('st').style.color='var(--a)';$('st').textContent='در حال دریافت...';
   try{
     const [d,h]=await Promise.all([load('1day',300),load('1h',2000)]);
     dData=d; hData=h; D.s.setData(d); H.s.setData(h);
@@ -92,9 +93,9 @@ async function refresh(){
       H.c.timeScale().setVisibleLogicalRange({from:h.length-120,to:h.length+5});
       first=false;
     }
-    $('st').textContent='آخرین آپدیت: '+new Date().toLocaleTimeString('fa-IR');
+    $('st').style.color='var(--m)';$('st').textContent='آخرین آپدیت: '+new Date().toLocaleTimeString('fa-IR');
     draw(); info();
-  }catch(e){ $('st').textContent='خطا: '+e.message; }
+  }catch(e){ $('st').textContent='خطا: '+(e.message==='Failed to fetch'?'اتصال به api.twelvedata.com برقرار نشد (اینترنت، فیلتر یا VPN).':e.message); }
 }
 
 function drawOne(ch,ov,arr){
