@@ -39,10 +39,11 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
     <option value="180">هر ۳ دقیقه</option>
     <option value="300" selected>هر ۵ دقیقه</option>
   </select>
-  <button id="bVl" class="on">خط عمودی</button>
-  <button id="bDay">کندل کامل</button>
+  <button id="bDay" class="on">انتخاب کندل</button>
+  <button id="bVl">خط عمودی</button>
   <button id="bLine">خط افقی</button>
   <button id="bMag">مگنت</button>
+  <button id="bXh" class="on">کراس موازی</button>
   <button id="bSync">همگام زمان</button>
   <button id="bFit">H1 روی بازه</button>
   <button id="bClr">پاک‌سازی</button>
@@ -72,7 +73,8 @@ const $=id=>document.getElementById(id);
 const LS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 $('key').value=LS.get('td_key')||'';
 $('sym').value=LS.get('td_sym')||'EUR/USD';
-const HINT='هر جای چارت (روزانه یا ساعتی) بزن تا خط عمودی بیفته. خط رو بکش تا جابه‌جا شه و با × پاکش کن. هر دو خط پشت‌سرهم یک بازه می‌سازن.';
+const HINT='روی یک کندل روزانه بزن تا کل اون کندل (از شروعش تا شروع کندل بعدی) روی H1 هم هایلایت بشه. برای چند روز پشت‌سرهم، کندل آخر رو هم بزن. برای خط دلخواه، حالت «خط عمودی» رو بزن.';
+const HINT_OLD='هر جای چارت (روزانه یا ساعتی) بزن تا خط عمودی بیفته. خط رو بکش تا جابه‌جا شه و با × پاکش کن. هر دو خط پشت‌سرهم یک بازه می‌سازن.';
 $('info').textContent=HINT;
 
 const DN=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -85,7 +87,7 @@ const tickF=(t,type)=>{const d=new Date(t*1000);
   if(type===1)return MN[d.getUTCMonth()]+' '+String(d.getUTCFullYear()).slice(2);
   if(type===2)return DN[d.getUTCDay()].slice(0,3)+' '+d.getUTCDate()+' '+MN[d.getUTCMonth()];
   return p2(d.getUTCHours())+':'+p2(d.getUTCMinutes());};
-const opt={autoSize:true,layout:{background:{color:'#161d25'},textColor:'#8996a3'},
+const opt={autoSize:true,crosshair:{mode:0},layout:{background:{color:'#161d25'},textColor:'#8996a3'},
   grid:{vertLines:{color:'#202a35'},horzLines:{color:'#202a35'}},
   rightPriceScale:{borderColor:'#27313d'},
   timeScale:{borderColor:'#27313d',timeVisible:true,secondsVisible:false}};
@@ -93,10 +95,10 @@ function mk(el,ov,sec,cf){
   const c=LightweightCharts.createChart(el,Object.assign({},opt,{localization:{timeFormatter:cf},timeScale:Object.assign({},opt.timeScale,{tickMarkFormatter:tickF})}));
   const s=c.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',borderVisible:false,wickUpColor:'#26a69a',wickDownColor:'#ef5350'});
   const sl=document.createElement('div'); ov.appendChild(sl);
-  return {c,s,sec,el,ov,sl,els:new Map(),data:[],lock:0,key:''};
+  return {c,s,sec,el,ov,sl,els:new Map(),data:[],lock:0,key:'',pk:null,pt:0,xl:0};
 }
 const D=mk($('cd'),$('od'),86400,fDay), H=mk($('ch'),$('oh'),3600,fDT);
-let lastId=0, vl=[], nid=0, drag=null, mode='vl', snap=false, first=true, timer=null, lines=[];
+let lastId=0, dayPair=null, xh=true, vl=[], nid=0, drag=null, mode='day', snap=false, first=true, timer=null, lines=[];
 const lb=(a,t)=>{let l=0,h=a.length;while(l<h){const m=(l+h)>>1;a[m].time<t?l=m+1:h=m}return l};
 const PAL=['255,176,32','79,195,247','186,104,200','129,199,132'];
 const sorted=()=>vl.slice().sort((a,b)=>a.t-b.t);
@@ -116,7 +118,7 @@ async function refresh(){
   $('st').style.color='var(--a)';$('st').textContent='در حال دریافت...';
   try{
     const [d,h]=await Promise.all([load('1day',500),load('1h',5000)]);
-    D.data=d; H.data=h; D.s.setData(d); H.s.setData(h);
+    D.data=d; H.data=h; D.pk=H.pk=null; D.pt=H.pt=0; paint(D); paint(H);
     if(first){
       D.c.timeScale().setVisibleLogicalRange({from:d.length-40,to:d.length+3});
       H.c.timeScale().setVisibleLogicalRange({from:h.length-120,to:h.length+5});
@@ -189,9 +191,35 @@ function draw(){ drawOne(D); drawOne(H); }
 D.c.timeScale().subscribeVisibleLogicalRangeChange(draw);
 H.c.timeScale().subscribeVisibleLogicalRangeChange(draw);
 new ResizeObserver(draw).observe($('cd')); new ResizeObserver(draw).observe($('ch'));
-(function loop(){draw();requestAnimationFrame(loop);})(); // keeps lines glued to candles while zooming/panning
+(function loop(){draw();paint(D);paint(H);requestAnimationFrame(loop);})(); // keeps lines glued to candles while zooming/panning
 
 const fmt=fDT;
+function paint(X){ // candles outside the marked ranges are dimmed, inside stay bright (native highlight on both charts)
+  const now=performance.now(); if(now-X.pt<150) return;
+  const s=sorted(), R=[]; for(let k=0;k+1<s.length;k+=2) R.push([s[k].t,s[k+1].t]);
+  const key=R.map(r=>r.join('-')).join(); if(key===X.pk) return;
+  X.pk=key; X.pt=now;
+  X.s.setData(R.length?X.data.map(b=>{
+    if(R.some(r=>b.time>=r[0]&&b.time<r[1])) return b;
+    const c=b.close>=b.open?'rgba(38,166,154,.28)':'rgba(239,83,80,.28)';
+    return Object.assign({},b,{color:c,wickColor:c,borderColor:c});
+  }):X.data);
+}
+// parallel crosshair: hovering a daily candle shows the crosshair at its start on H1, and vice versa
+function mirror(S,T,p){
+  if(!xh||performance.now()<S.xl) return;
+  try{
+    T.xl=performance.now()+60;
+    if(!p.time||!p.point){T.c.clearCrosshairPosition();return;}
+    const price=S.s.coordinateToPrice(p.point.y); if(price===null) return;
+    let t;
+    if(S===D){const i=lb(H.data,p.time); if(i>=H.data.length) return; t=H.data[i].time;}
+    else{const j=lb(D.data,p.time+1)-1; if(j<0) return; t=D.data[j].time;}
+    T.c.setCrosshairPosition(price,t,T.s);
+  }catch(e){}
+}
+D.c.subscribeCrosshairMove(p=>mirror(D,H,p));
+H.c.subscribeCrosshairMove(p=>mirror(H,D,p));
 function info(){
   const s=sorted(), h=H.data;
   if(!s.length){$('info').textContent=HINT;return;}
@@ -233,9 +261,14 @@ function addLine(X,p){
 D.c.subscribeClick(p=>{
   if(mode==='line') return addLine(D,p);
   if(mode==='vl') return addAt(D,p);
-  if(!p.time) return; // full-day mode: two lines at the candle's start and end
-  const a={id:++nid,t:p.time}, b={id:++nid,t:p.time+86400};
-  vl.push(a,b); lastId=a.id; draw(); info(); fitFor(a.id);
+  if(!p.time) return; // candle mode: lines at the candle's start and at the start of the next one
+  const t=p.time;
+  if(dayPair&&dayPair.single){
+    const A=vl.find(o=>o.id===dayPair.a), B=vl.find(o=>o.id===dayPair.b);
+    if(A&&B){A.t=Math.min(A.t,t);B.t=Math.max(B.t,t+86400);dayPair.single=false;lastId=A.id;draw();info();fitFor(A.id);return;}
+  }
+  const a={id:++nid,t}, b={id:++nid,t:t+86400};
+  vl.push(a,b); dayPair={a:a.id,b:b.id,single:true}; lastId=a.id; draw(); info(); fitFor(a.id);
 });
 H.c.subscribeClick(p=>{
   if(mode==='line') addLine(H,p);
@@ -261,8 +294,9 @@ function setMode(m){mode=m;
 $('bVl').onclick=()=>setMode('vl');
 $('bDay').onclick=()=>setMode('day');
 $('bLine').onclick=()=>setMode(mode==='line'?'vl':'line');
+$('bXh').onclick=()=>{xh=!xh;$('bXh').classList.toggle('on',xh);if(!xh){try{D.c.clearCrosshairPosition();H.c.clearCrosshairPosition();}catch(e){}}};
 $('bMag').onclick=()=>{snap=!snap;$('bMag').classList.toggle('on',snap);};
-$('bClr').onclick=()=>{lines.forEach(o=>o.s.removePriceLine(o.l));lines=[];vl=[];draw();info();};
+$('bClr').onclick=()=>{lines.forEach(o=>o.s.removePriceLine(o.l));lines=[];vl=[];dayPair=null;draw();info();};
 
 function startTimer(){
   clearInterval(timer);
